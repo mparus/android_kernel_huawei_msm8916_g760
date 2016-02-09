@@ -353,7 +353,7 @@
 		qcom,rpull-up-kohm = <68>;
 		qcom,vref-batt-therm = <1800000>;
 
-		//#include "batterydata-qrd-skuh-4v35-2000mah.dtsi"
+	/*#include "batterydata-qrd-skuh-4v35-2000mah.dtsi"*/
 	};
 };
 
