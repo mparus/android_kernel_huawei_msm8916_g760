@@ -169,8 +169,6 @@ struct bq2415x_device {
 	int charge_full_count;
 	int charge_done_flag;
 	bool charge_disable;
-    int use_only_charge;
-    bool soc_resume_charging;
 };
 
 typedef enum jeita_thermal_zone

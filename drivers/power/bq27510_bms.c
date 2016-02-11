@@ -171,10 +171,6 @@ static int bq27510_i2c_read_word(struct bq27510_device_info *di,u8 reg)
     int err = 0;
     int i = 0;
 
-    if(NULL == di)
-    {
-        return err;
-    }
     mutex_lock(&bq27510_battery_mutex);
     for(i = 0; i < 5; i++)
     {
@@ -467,108 +463,24 @@ int bq27510_battery_tte(struct bq27510_device_info *di)
 }
 
 
-int bq27510_battery_cyc(struct bq27510_device_info *di)
+int bq27510_battery_ttf(struct bq27510_device_info *di)
 {
     int data = 0;
 
     if(!bq27510_is_accessible())
         return 0;
 
-    data = bq27510_i2c_read_word(di,BQ27510_REG_CYC);
+    data = bq27510_i2c_read_word(di,BQ27510_REG_TTF);
     if(data < 0)
     {
-        pr_debug("i2c error in reading CYC!");
+        pr_debug("i2c error in reading TTF!");
         return 0;
     }
 
-    pr_debug("read cyc result = %d minutes\n",data);
+    pr_debug("read ttf result = %d minutes\n",data);
     return data;
 }
 
-int bq27510_battery_ufrm(struct bq27510_device_info *di)
-{
-    int data = 0;
-
-    if(!bq27510_is_accessible())
-        return 0;
-
-    data = bq27510_i2c_read_word(di,BQ27510_REG_UFRM);
-    if(data < 0)
-    {
-        pr_debug("i2c error in reading UFRM!");
-        return 0;
-    }
-    pr_debug("read bq27510_battery_ufrm result = %d mAh\n",data);
-    return data;
-}
-
-int bq27510_battery_frm(struct bq27510_device_info *di)
-{
-    int data = 0;
-
-    if(!bq27510_is_accessible())
-        return 0;
-
-    data = bq27510_i2c_read_word(di,BQ27510_REG_FRM);
-    if(data < 0)
-    {
-        pr_debug("i2c error in reading FRM!");
-        return 0;
-    }
-    pr_debug("read bq27510_battery_frm result = %d mAh\n",data);
-    return data;
-}
-
-int bq27510_battery_uffcc(struct bq27510_device_info *di)
-{
-    int data = 0;
-
-    if(!bq27510_is_accessible())
-        return 0;
-
-    data = bq27510_i2c_read_word(di,BQ27510_REG_UFFCC);
-    if(data < 0)
-    {
-        pr_debug("i2c error in reading UFFCC!");
-        return 0;
-    }
-    pr_debug("read bq27510_battery_uffcc result = %d mAh\n",data);
-    return data;
-}
-
-int bq27510_battery_ffcc(struct bq27510_device_info *di)
-{
-    int data = 0;
-
-    if(!bq27510_is_accessible())
-        return 0;
-
-    data = bq27510_i2c_read_word(di,BQ27510_REG_FFCC);
-    if(data < 0)
-    {
-        pr_debug("i2c error in reading FFCC!");
-        return 0;
-    }
-    pr_debug("read bq27510_battery_ffcc result = %d mAh\n",data);
-    return data;
-}
-
-int bq27510_battery_ufsoc(struct bq27510_device_info *di)
-{
-    int data = 0;
-
-    if(!bq27510_is_accessible())
-        return 0;
-
-    data = bq27510_i2c_read_word(di,BQ27510_REG_UFSOC);
-    if(data < 0)
-    {
-        pr_debug("i2c error in reading UFSOC!");
-        return 0;
-    }
-    pr_debug("read bq27510_battery_ufsoc result = %d Hundred Percents\n",data);
-    return data;
-}
 
 int is_bq27510_battery_full(struct bq27510_device_info *di)
 {
@@ -995,6 +907,54 @@ int get_gas_version_id(char * id, char * name)
     return 0;
 }
 
+static void hw_set_battery_impedance(struct bq27510_device_info *di, u8 RBase)
+{
+    u8 reg = 0;
+    u8 checksum = 0;
+
+    mutex_lock(&bq27510_battery_mutex);
+    i2c_smbus_write_word_data(di->client, BQ27510_REG_DFCLS, BQ27510_REG_CLASS_ID_FOR_IMPEDANCE);
+    mdelay(2);
+    i2c_smbus_write_word_data(di->client, BQ27510_REG_DFBLK, 0x0);
+    mdelay(2);
+    reg = i2c_smbus_read_byte_data(di->client, BQ27510_REG_BLOCKDATA_43);
+    mdelay(2);
+    checksum = i2c_smbus_read_byte_data(di->client, BQ27510_REG_DFDCKS);
+    checksum += reg - RBase;
+    mdelay(2);
+    i2c_smbus_write_word_data(di->client, BQ27510_REG_BLOCKDATA_43, RBase);
+    mdelay(2);
+    i2c_smbus_write_word_data(di->client, BQ27510_REG_DFDCKS, checksum);
+    mdelay(2);
+    reg = i2c_smbus_read_byte_data(di->client, BQ27510_REG_BLOCKDATA_43);
+    mdelay(2);
+    mutex_unlock(&bq27510_battery_mutex);
+
+    pr_info("new impedance 0x%x\n", reg);
+
+    return;
+}
+
+static ssize_t battery_impedance_show(struct device_driver *driver, char *buf)
+{
+    u8 reg = 0;
+
+    mutex_lock(&bq27510_battery_mutex);
+    i2c_smbus_write_word_data(g_battery_measure_by_bq27510_device->client, BQ27510_REG_DFCLS, BQ27510_REG_CLASS_ID_FOR_IMPEDANCE);
+    mdelay(2);
+    i2c_smbus_write_word_data(g_battery_measure_by_bq27510_device->client, BQ27510_REG_DFBLK, 0x0);
+    mdelay(2);
+    reg = i2c_smbus_read_byte_data(g_battery_measure_by_bq27510_device->client, BQ27510_REG_BLOCKDATA_43);
+    mdelay(2);
+    mutex_unlock(&bq27510_battery_mutex);
+
+    pr_info(" battery impedance is 0x%x\n", reg);
+
+    return snprintf(buf, PAGE_SIZE, "%x\n", reg);
+}
+
+static DRIVER_ATTR(battery_impedance, S_IRUGO, battery_impedance_show, NULL);
+
 static void bq27510_firmware_update(struct work_struct *work)
 {
     int rc = 0;
@@ -1007,6 +967,7 @@ static void bq27510_firmware_update(struct work_struct *work)
     struct firmware_header *fw_header = NULL;
     struct bq27510_device_info *di = NULL;
     struct device_node *np = NULL;
+    u8 RBase = 0;
 	fw_update_ok = FW_UPD_PROCESSING;
 
     di = container_of(work, struct bq27510_device_info, update_work.work);
@@ -1093,6 +1054,31 @@ static void bq27510_firmware_update(struct work_struct *work)
     }
     pr_info("update success\n");
     release_firmware(fw);
+
+    /* after firmware update, reset the Rbase for each known battery */
+    if(!strncasecmp(fw_name, "g760-HB3748B8EBC_FMT_ATL.fw", strlen(fw_name)))
+    {
+        RBase = RBASE_FOR_ATL;
+    }
+    else if(!strncasecmp(fw_name, "g760-HB3748B8EBC_XWD_SDI.fw", strlen(fw_name)))
+    {
+        RBase = RBASE_FOR_XWD;
+    }
+    else if(!strncasecmp(fw_name, "g760-HB3748B8EBC_LS_LS.fw", strlen(fw_name)))
+    {
+        RBase = RBASE_FOR_LS;
+    }
+    else
+    {
+        pr_info("unknown battery\n");
+        RBase = 0x0;
+    }
+
+    if(RBase)
+    {
+        msleep(TIME_FOR_FIRMWARE_UNLOCK);
+        hw_set_battery_impedance(di, RBase);
+    }
 
     return;
 }
@@ -1462,7 +1448,7 @@ static int ti_bms_power_get_property(struct power_supply *psy,
         val->intval = bq27510_battery_health(g_battery_measure_by_bq27510_device);
         break;
     case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
-        val->intval = bq27510_get_gasgauge_qmax(g_battery_measure_by_bq27510_device)*1000;
+        val->intval = bq27510_battery_fcc(g_battery_measure_by_bq27510_device);
         break;
     default:
         return -EINVAL;
@@ -1487,8 +1473,8 @@ static char *bq27510_supplied_to[] =
 
 static ssize_t bq27510_show_gaugelog(struct device_driver *driver, char *buf)
 {
-    int temp = 0, voltage = 0, capacity = 100, rm = 0, fcc = 0,ufrm = 0,frm = 0,uffcc = 0,ffcc = 0,ufsoc = 100;
-    int cur = 0,cyc = 0,si = 0;
+    int temp = 0, voltage = 0, capacity = 100, rm = 0, fcc = 0;
+    int cur = 0,ttf = 0,si = 0;
     u16 flag = 0,control_status = 0;
     int qmax = 0;
 
@@ -1519,7 +1505,7 @@ static ssize_t bq27510_show_gaugelog(struct device_driver *driver, char *buf)
     mdelay(2);
     fcc =  bq27510_battery_fcc(di);
     mdelay(2);
-    cyc = bq27510_i2c_read_word(di,BQ27510_REG_CYC);
+    ttf = bq27510_i2c_read_word(di,BQ27510_REG_TTF);
     mdelay(2);
     si = bq27510_i2c_read_word(di,BQ27510_REG_SI);
 
@@ -1532,24 +1518,14 @@ static ssize_t bq27510_show_gaugelog(struct device_driver *driver, char *buf)
     mdelay(2);
     qmax =  bq27510_get_gasgauge_qmax(di);
     mdelay(2);
-    ufrm = bq27510_battery_ufrm(di);
-    mdelay(2);
-    frm = bq27510_battery_frm(di);
-    mdelay(2);
-    uffcc = bq27510_battery_uffcc(di);
-    mdelay(2);
-    ffcc = bq27510_battery_ffcc(di);
-    mdelay(2);
-    ufsoc = bq27510_battery_ufsoc(di);
-    mdelay(2);
     if(qmax < 0)
     {
         return snprintf(buf, PAGE_SIZE, "%s", "Coulometer Damaged or Firmware Error \n");
     }
     else
     {
-        snprintf(buf, PAGE_SIZE, "%-9d  %-9d  %-4d  %-5d  %-6d  %-6d  %-6d  %-6d  0x%-5.4x  0x%-5.4x  %-6d  %-5d  %-5d  %-6d  %-6d  %-4d  ",
-                voltage,  (signed short)cur, capacity, rm, fcc, (signed short)cyc, (signed short)si, temp, flag, control_status, qmax, ufrm, frm, uffcc, ffcc, ufsoc);
+        snprintf(buf, PAGE_SIZE, "%-9d  %-9d  %-4d  %-5d  %-6d  %-6d  %-6d  %-6d  0x%-5.4x  0x%-5.4x  %-6d  ",
+                voltage,  (signed short)cur, capacity, rm, fcc, (signed short)ttf, (signed short)si, temp, flag, control_status, qmax);
     }
     return strlen(buf);
 }
@@ -1599,13 +1575,13 @@ static struct attribute *bq27510_sysfs_attributes[] =
     &driver_attr_remaining_capacity.attr,
 	&driver_attr_firmware_version.attr,
 	&driver_attr_firmware_update_success.attr,
+	&driver_attr_battery_impedance.attr,
     NULL,
 };
 
 static umode_t ti_bms_prop_is_visible(struct kobject *a,struct attribute *b, int i)
 {
 	bool use_other_charger = false;
-    bool use_ti_coulometer = false;
 	struct device_node *qcom_charger = of_find_node_by_name(NULL,"qcom,charger");
 	if (!qcom_charger)
 	{
@@ -1614,13 +1590,10 @@ static umode_t ti_bms_prop_is_visible(struct kobject *a,struct attribute *b, int
 	}
 
 	use_other_charger = of_property_read_bool(qcom_charger, "qcom,use-other-charger");
-    use_ti_coulometer = of_property_read_bool(qcom_charger, "qcom,use-ti-coulometer");
 	of_node_put(qcom_charger);
 
-	if(use_other_charger && use_ti_coulometer)
-    {
-        return b->mode;
-    }
+	if(use_other_charger)
+		return b->mode;
 	else
 		return 0;
 }
@@ -1674,8 +1647,7 @@ static int bq27510_battery_probe(struct i2c_client *client,
     if(retval < 0)
     {
         pr_info("coulometer damaged or firmware error\n");
-		//if i2c read word fail,we will not prob TI.
-		//if i2c read fail go on TI probe,otherwith there wil be NULL pointer problem
+		//if firmware update failed. update again.
 		//return -ENODEV;
     }
     else
@@ -1713,7 +1685,7 @@ static int bq27510_battery_probe(struct i2c_client *client,
 
     bq27510_dt_parse(&client->dev, di);
 
-    if (client->irq > 0)
+    if (client->irq)
     {
         retval = gpio_request(client->irq, "battary-alarm");
         if(retval < 0)

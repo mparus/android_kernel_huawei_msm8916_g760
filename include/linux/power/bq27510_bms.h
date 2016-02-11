@@ -10,11 +10,11 @@
 #define BQ27510_REG_FLAGS   (0x0a)
 /*Time to Empty*/
 #define BQ27510_REG_TTE     (0x16)
-/*Cycle Count*/
-#define BQ27510_REG_CYC     (0x1e)
+/*Time to Full*/
+#define BQ27510_REG_TTF     (0x18)
 /* State-of-Charge */
 //register has been changed in new fw version
-#define BQ27510_REG_SOC     (0x20)
+#define BQ27510_REG_SOC     (0x2c)
 /*Average Current*/
 #define BQ27510_REG_AI      (0x14)
 /*Remainning Capacity*/
@@ -22,7 +22,7 @@
 /*Full Charge Capacity*/
 #define BQ27510_REG_FCC     (0x12)
 /*Standby Current*/
-#define BQ27510_REG_SI      (0x18)
+#define BQ27510_REG_SI      (0x1a)
 /*DesignCapacity*/
 #ifdef CONFIG_HUAWEI_DSM
 #define BQ27510_DESIGN_CAPACITY		(0x2e)
@@ -39,11 +39,15 @@
 #define BQ27510_REG_FLASH             (0x40)
 #define BQ27510_REG_FIRMWARE_ID      (0x0008)
 #define BQ27510_REG_FIRMWARE_VERSION (0x0039)
-#define BQ27510_REG_UFRM          (0x6c)
-#define BQ27510_REG_FRM           (0x6e)
-#define BQ27510_REG_UFFCC         (0x70)
-#define BQ27510_REG_FFCC          (0x72)
-#define BQ27510_REG_UFSOC         (0x74)
+
+#define BQ27510_REG_DFBLK	(0x3f)
+#define BQ27510_REG_BLOCKDATA_43		(0X43)
+#define BQ27510_REG_DFDCKS	(0x60)
+#define BQ27510_REG_CLASS_ID_FOR_IMPEDANCE     (0x5b)
+#define RBASE_FOR_ATL		(0x17)
+#define RBASE_FOR_XWD		(0x1D)
+#define RBASE_FOR_LS		(0x20)
+#define TIME_FOR_FIRMWARE_UNLOCK		(6000)
 
 /* both words and bytes are LSB*/
 /* Full-charged bit */

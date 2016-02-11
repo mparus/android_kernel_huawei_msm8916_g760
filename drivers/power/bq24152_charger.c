@@ -58,10 +58,6 @@
 #define STATUS_CHARGING 1
 /*temperature hysteresis is 2 centigrade*/
 #define TEMP_HYSTERESIS 20
-#define  VOLTAGE_NOW_DEFULT  (1000)
-#define  CURRENT_NOW_DEFULT  (-1)
-#define  CHARGE_FULL_DESIGN_DEFULT  (1500)
-#define  CAPACITY_DEFAULT  (50)
 /*default temp is 9 centigrade*/
 #define TEMP_DEFAULT 90
 #define STATUS_MIGRATE 1
@@ -69,22 +65,15 @@
 
 jeita_spec jeita_batt_param =
 {
-	.normal	= {100,420,1250,4340},
+	.normal	= {100,420,1250,4320},
 	.hot.t_high = -1
 };
 
-#ifdef CONFIG_HUAWEI_HLTHERM_CHARGING
-extern int get_high_low_temp_flag(void);
-#endif
 static int g_current_config = 0;
 static bool current_config_changed = false;
 static DEFINE_SPINLOCK(current_config_changed_lock);
 
 static bool user_ctl_status = true;
-#define BAT_CAPACITY_FULL    (100)
-static struct bq2415x_device *g_bq;
-extern int get_true_bms_soc(void);
-extern int get_ui_bms_soc(void);
 //delete dead code.
 extern int hot_design_current;
 
@@ -191,9 +180,10 @@ static DEFINE_MUTEX(bq2415x_id_mutex);
 static DEFINE_MUTEX(bq2415x_timer_mutex);
 static DEFINE_MUTEX(bq2415x_i2c_mutex);
 
-extern struct qpnp_lbc_chip *g_lbc_chip;
 #ifdef CONFIG_HUAWEI_DSM
 extern struct dsm_client *charger_dclient;
+extern struct bq2415x_device *bq_device;
+extern struct qpnp_lbc_chip *g_lbc_chip;
 void bq2415x_dump_regs(struct dsm_client *dclient);
 extern int dump_registers_and_adc(struct dsm_client *dclient, struct qpnp_lbc_chip *chip, int type);
 #endif
@@ -242,9 +232,9 @@ void bq2415x_dump_regs(struct dsm_client *dclient)
 
 	dsm_client_record(dclient, "[BQ24152] regs:\n");
 	pr_info("[BQ24152] regs:\n");
-	if(g_bq){
+	if(bq_device){
 		for(reg = BQ2415X_REG_STATUS; reg <= BQ2415X_REG_CURRENT; reg++){
-			ret = bq2415x_i2c_read(g_bq, reg);
+			ret = bq2415x_i2c_read(bq_device, reg);
 			dsm_client_record(dclient, "0x%x, 0x%x\n", reg, ret);
 			pr_info("0x%x, 0x%x\n", reg, ret);
 		}
@@ -261,8 +251,8 @@ RETURN:	a int value, the value of bq2415x reg
 int get_bq2415x_reg_values(u8 reg)
 {
 	int ret = 0;
-	if(g_bq){
-		ret = bq2415x_i2c_read(g_bq, reg);
+	if(bq_device){
+		ret = bq2415x_i2c_read(bq_device, reg);
 		return ret;
 	}else{
 		pr_info("bq_device is not init, do nothing!\n");
@@ -882,12 +872,12 @@ RETURN:	a int value, the error status of bq2415x
 int get_bq2415x_fault_status(void)
 {
 	int error = 0;
-	if(g_bq == NULL)
+	if(bq_device == NULL)
 	{
 		pr_info("%s:device not init,do nothing!\n",__func__);
 		return -EINVAL;
 	}
-	error = bq2415x_exec_command(g_bq, BQ2415X_FAULT_STATUS);
+	error = bq2415x_exec_command(bq_device, BQ2415X_FAULT_STATUS);
 	if (error < 0) {
 		pr_err ("Unknown error\n");
 	}
@@ -904,12 +894,12 @@ RETURN:	a int value, 1 means bq24152 is in boost mode, 0 means charger mode
 int is_bq24152_in_boost_mode(void)
 {
 	int ret = 0;
-	if(g_bq == NULL)
+	if(bq_device == NULL)
 	{
 		pr_info("%s:device not init,do nothing!\n",__func__);
 		return -EINVAL;
 	}
-	ret = bq2415x_exec_command(g_bq, BQ2415X_BOOST_STATUS);
+	ret = bq2415x_exec_command(bq_device, BQ2415X_BOOST_STATUS);
 	if (ret < 0)
 		return ret;
 	if(0 == ret)
@@ -923,7 +913,7 @@ EXPORT_SYMBOL(is_bq24152_in_boost_mode);
 void notify_bq24152_to_control_otg(bool enable)
 {
 	int mode = 0;
-	if(g_bq == NULL)
+	if(bq_device == NULL)
 	{
 		pr_info("%s:device not init,do nothing!\n",__func__);
 		return;
@@ -933,12 +923,12 @@ void notify_bq24152_to_control_otg(bool enable)
 		pr_info("bq2415x_set_mode: boost mode, enable=%d\n", enable);
 		if(1 == mode)
 			return;
-		bq2415x_set_mode(g_bq, BQ2415X_MODE_BOOST);
+		bq2415x_set_mode(bq_device, BQ2415X_MODE_BOOST);
 	}else{
 		pr_info("bq2415x_set_mode: normal mode, enable=%d\n", enable);
 		if(0 == mode)
 			return;
-		bq2415x_set_mode(g_bq, BQ2415X_MODE_OFF);
+		bq2415x_set_mode(bq_device, BQ2415X_MODE_OFF);
 	}
 }
 EXPORT_SYMBOL(notify_bq24152_to_control_otg);
@@ -1002,67 +992,13 @@ static void bq2415x_timer_error(struct bq2415x_device *bq, const char *msg)
 }
 #endif
 
-static void bq2451x_check_charge_status_by_charger(struct bq2415x_device *bq)
-{
-    int rc;
-    if(bq == NULL)
-    {
-        pr_debug("TI chip uninitialized\n");
-        return;
-    }
-    if(!is_usb_chg_exist())
-    {
-        bq->charge_done_flag = 0;
-        return;
-    }
-    if(bq->charge_done_flag==1)
-    {
-        rc = bq2415x_exec_command(bq, BQ2415X_CHARGER_DISABLE);
-        if(rc < 0)
-        {
-            pr_info("disable charger failed\n");
-            return;
-        }
-        pr_debug("charge full, stop charege!\n");
-       if(bq->soc_resume_charging)
-       {
-            bq->charge_done_flag = 0;
-       }
-    }
-    else
-    {
-        rc = bq2415x_exec_command(bq, BQ2415X_HIGH_IMPEDANCE_STATUS);
-        if(rc < 0)
-        {
-            pr_info("get hzmode failed\n");
-            return;
-        }
-        else if(rc == 0)
-        {
-            if(!bq->charge_disable)
-            {
-                //if battery is not full, enable charge
-                rc = bq2415x_exec_command(bq, BQ2415X_CHARGER_ENABLE);
-                if(rc < 0)
-                {
-                    pr_info("charge enable set failed\n");
-                    return;
-                }
-             }
-         }
-         else
-         {
-              pr_info("High impedance mode!\n");
-              bq->charge_done_flag = 0;
-        }
-    }
-}
 /* to check whether charge is done by gasgauge */
 static void bq2451x_check_charge_status(struct bq2415x_device *bq)
 {
 	int battery_full = 0;
 	int rc;
-	if((g_bq == NULL) || (g_battery_measure_by_bq27510_device == NULL))
+
+	if((bq_device == NULL) || (g_battery_measure_by_bq27510_device == NULL))
 	{
 		pr_debug("TI chip uninitialized\n");
 		return;
@@ -1224,14 +1160,8 @@ static void bq2415x_timer_work(struct work_struct *work)
 		}
 	}
 	bq2415x_set_appropriate_jeita(bq);
-    if(!bq->use_only_charge)
-    {
-       bq2451x_check_charge_status(bq);
-    }
-    else
-    {
-       bq2451x_check_charge_status_by_charger(bq);
-    }
+
+	bq2451x_check_charge_status(bq);
 
 	now_charge_status = bq2415x_exec_command(bq, BQ2415X_CHARGE_STATUS);
 	if(bq->charge_done_flag)
@@ -1326,31 +1256,6 @@ static int increase_usb_ma_step(struct bq2415x_device *bq)
 
 	return rc;
 }
-/*===========================================
-FUNCTION: bq2415x_get_charge_type
-DESCRIPTION: get charge type
-IPNUT:bq2415x_device *bq
-RETURN:NONE or FAST
-=============================================*/
-int bq2415x_get_charge_type(struct bq2415x_device *bq)
-{
-    int rc=POWER_SUPPLY_CHARGE_TYPE_NONE;
-    rc = bq2415x_exec_command(bq, BQ2415X_CHARGE_STATUS);
-    if (rc<0)
-    {
-        pr_err("failed to read status");
-        return POWER_SUPPLY_CHARGE_TYPE_NONE;
-    }
-    else if (rc==1)
-    {
-        return POWER_SUPPLY_CHARGE_TYPE_FAST;
-    }
-    else
-    {
-        return POWER_SUPPLY_CHARGE_TYPE_NONE;
-    }
-    return POWER_SUPPLY_CHARGE_TYPE_NONE;
-}
 
 /*===========================================
 FUNCTION: bq2415x_usb_low_power_work
@@ -1412,22 +1317,9 @@ static void bq2415x_usb_low_power_work(struct work_struct *work)
 	}
 
 	/* Get battery voltage in mV*/
-    if(bq->use_only_charge)
-    {
-       if (bq->qcom_charger_psy){
-       rc = bq->qcom_charger_psy->get_property(bq->qcom_charger_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &val);
-        }
-        else{
-           val.intval=VOLTAGE_NOW_DEFULT;
-           pr_info("get battery voltage default %d\n",val.intval);
-        }
-    }
-    else
-    {
-        if (bq->ti_bms_psy){
-        rc = bq->ti_bms_psy->get_property(bq->ti_bms_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &val);
-        }
-    }
+	if (bq->ti_bms_psy){
+		rc = bq->ti_bms_psy->get_property(bq->ti_bms_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW, &val);
+	}
 	vbatt = val.intval /1000;
 
 	/* if battery voltage low, use default current to charge */
@@ -1511,6 +1403,7 @@ static void bq2415x_usb_low_power_work(struct work_struct *work)
 }
 
 /**** power supply interface code ****/
+
 static enum power_supply_property bq2415x_power_supply_props[] = {
 	/* TODO: maybe add more power supply properties */
 	POWER_SUPPLY_PROP_STATUS,
@@ -1524,8 +1417,6 @@ static enum power_supply_property bq2415x_power_supply_props[] = {
 	POWER_SUPPLY_PROP_CHARGING_ENABLED,
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
-    POWER_SUPPLY_PROP_CHARGE_TYPE,
-    POWER_SUPPLY_PROP_RESUME_CHARGING,
 };
 
 static int bq2415x_power_supply_get_property(struct power_supply *psy,
@@ -1535,42 +1426,20 @@ static int bq2415x_power_supply_get_property(struct power_supply *psy,
 	struct bq2415x_device *bq = container_of(psy, struct bq2415x_device,
 						 charger);
 	int ret = 0;
-    int result=0;
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
-		result = bq2415x_exec_command(bq, BQ2415X_CHARGE_STATUS);
-		if (result < 0)
-		{
-            pr_err("bq24152 get charge status error\n");
-			return result;
-		}
-		else if (result == 0) /* Ready */
+		ret = bq2415x_exec_command(bq, BQ2415X_CHARGE_STATUS);
+		if (ret < 0)
+			return ret;
+		else if (ret == 0) /* Ready */
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
-		else if (result == 1) /* Charge in progress */
+		else if (ret == 1) /* Charge in progress */
 			val->intval = POWER_SUPPLY_STATUS_CHARGING;
-		else if (result == 2) /* Charge done */
+		else if (ret == 2) /* Charge done */
 			val->intval = POWER_SUPPLY_STATUS_FULL;
 		else
 			val->intval = POWER_SUPPLY_STATUS_UNKNOWN;
 
-
-        if(bq->use_only_charge)
-        {
-            if(bq->qcom_bms_psy)
-            {
-               pr_debug("get real soc :%d\n",get_true_bms_soc());
-               if((BAT_CAPACITY_FULL==get_true_bms_soc())&&is_usb_chg_exist())
-               {
-                   bq->charge_done_flag=1;
-               }
-               if((bq->charge_done_flag)||((get_ui_bms_soc()==BAT_CAPACITY_FULL)&&is_usb_chg_exist()))
-               {
-                   val->intval = POWER_SUPPLY_STATUS_FULL;
-               }
-            }
-        }
-        else
-        {
 		if(bq->charge_done_flag \
 			|| ((g_battery_measure_by_bq27510_device == NULL ? 0 \
 				: g_battery_measure_by_bq27510_device->capacity == CAPACITY_FULL) \
@@ -1578,110 +1447,29 @@ static int bq2415x_power_supply_get_property(struct power_supply *psy,
 		{
 			val->intval = POWER_SUPPLY_STATUS_FULL;
 		}
-       }
 		break;
 	case POWER_SUPPLY_PROP_MODEL_NAME:
 		val->strval = bq->model;
 		ret = 0;
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
-        if(!bq->use_only_charge)
-        {
-          if (bq->ti_bms_psy)
-          {
+		if (bq->ti_bms_psy)
 			ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_TEMP,val);
-          }
-          else
-          {
-             val->intval = TEMP_DEFAULT;
-               pr_info("get   error status :%d\n",val->intval);
-          }
-        }
-        else
-        {
-            if (bq->qcom_charger_psy)
-            {
-               ret = bq->qcom_charger_psy->get_property(bq->qcom_charger_psy,POWER_SUPPLY_PROP_TEMP,val);
-            }
-           else
-           {
-             val->intval = TEMP_DEFAULT;
-               pr_info("get   error status :%d\n",val->intval);
-           }
-        }
-		 break;
+		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-        if(!bq->use_only_charge)
-        {
-             if (bq->ti_bms_psy)
-             {
-                ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_VOLTAGE_NOW,val);
-             }
-           else
-           {
-             val->intval = VOLTAGE_NOW_DEFULT;
-               pr_info("get   error status :%d\n",val->intval);
-           }
-        }
-        else
-        {
-           if (bq->qcom_charger_psy)
-           {
-              ret = bq->qcom_charger_psy->get_property(bq->qcom_charger_psy,POWER_SUPPLY_PROP_VOLTAGE_NOW,val);
-           }
-           else
-           {
-             val->intval = VOLTAGE_NOW_DEFULT;
-               pr_info("get   error status :%d\n",val->intval);
-           }
-        }
+		if (bq->ti_bms_psy)
+			ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_VOLTAGE_NOW,val);
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
-        if(!bq->use_only_charge)
-        {
-            if (bq->ti_bms_psy){
-             ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_CURRENT_NOW,val);
-            }
-           else
-           {
-               val->intval = CURRENT_NOW_DEFULT;
-               pr_info("get   error status :%d\n",val->intval);
-           }
-        }
-        else
-        {
-           if (bq->qcom_bms_psy)
-           {
-            ret = bq->qcom_bms_psy->get_property(bq->qcom_bms_psy,POWER_SUPPLY_PROP_CURRENT_NOW,val);
-           }
-           else
-           {
-             val->intval = CURRENT_NOW_DEFULT;
-               pr_info("get   error status :%d\n",val->intval);
-           }
-        }
+		if (bq->ti_bms_psy)
+			ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_CURRENT_NOW,val);
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
-        if(!bq->use_only_charge)
-        {
-            if (bq->ti_bms_psy)
-               ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_HEALTH,val);
+		if (bq->ti_bms_psy)
+			ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_HEALTH,val);
 		//if ti fuel gauge is not ready,val return UNKNOWN.
-            else
-            val->intval = POWER_SUPPLY_HEALTH_UNKNOWN;
-        }
-        else
-        {
-           if (bq->qcom_charger_psy)
-            {
-                ret = bq->qcom_charger_psy->get_property(bq->qcom_charger_psy,POWER_SUPPLY_PROP_HEALTH,val);
-            }
-           else
-           {
-            val->intval = POWER_SUPPLY_HEALTH_UNKNOWN;
-            pr_info("get   error status :%d\n",val->intval);
-           }
-        }
+		else
+			val->intval = POWER_SUPPLY_HEALTH_UNKNOWN;
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
 		if(bq->qcom_charger_psy)
@@ -1695,72 +1483,22 @@ static int bq2415x_power_supply_get_property(struct power_supply *psy,
 		ret = 0;
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
-        if(!bq->use_only_charge)
-        {
-            if(bq->ti_bms_psy){
-              ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_CAPACITY,val);
-            }
-            else
-            {
-               val->intval=CAPACITY_DEFAULT;
-               pr_info("get   error status :%d\n",val->intval);
-            }
-         }
-        else
-        {
-            if(bq->qcom_bms_psy)
-            {
-               ret = bq->qcom_bms_psy->get_property(bq->qcom_bms_psy,POWER_SUPPLY_PROP_CAPACITY,val);
-            }
-            else
-            {
-              val->intval=CAPACITY_DEFAULT;
-               pr_info("get   error status :%d\n",val->intval);
-            }
-        }
-        if(bq->charge_done_flag)
-        {
-             val->intval = BAT_CAPACITY_FULL;
-        }
+		if(bq->ti_bms_psy)
+			ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_CAPACITY,val);
+		if(bq->charge_done_flag)
+		{
+			val->intval = CAPACITY_FULL;
+		}
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
-        if(!bq->use_only_charge)
-        {
-           if(bq->ti_bms_psy)
-           {
-               ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,val);
-           }
-           else
-           {
-               val->intval = CHARGE_FULL_DESIGN_DEFULT;
-               pr_info("get   error status :%d\n",val->intval);
-           }
-        }
-       else
-       {
-           if(bq->qcom_bms_psy)
-             {
-                ret = bq->qcom_bms_psy->get_property(bq->qcom_bms_psy,POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,val);
-             }
-            else
-            {
-               val->intval = CHARGE_FULL_DESIGN_DEFULT;
-               pr_info("get   error status :%d\n",val->intval);
-            }
-       }
+		if(bq->ti_bms_psy)
+			ret = bq->ti_bms_psy->get_property(bq->ti_bms_psy,POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,val);
 		break;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LIPO;
 		break;
-    case POWER_SUPPLY_PROP_CHARGE_TYPE:
-        val->intval = bq2415x_get_charge_type(bq);
-        break;
-    case POWER_SUPPLY_PROP_RESUME_CHARGING:
-         val->intval = bq->soc_resume_charging;
-     break;
 	default:
-        ret = -EINVAL;
-        break;
+		return -EINVAL;
 	}
 	return ret;
 }
@@ -1794,19 +1532,13 @@ static int bq2415x_power_supply_set_property(struct power_supply *psy,
 			rc = bq2415x_exec_command(bq, BQ2415X_HIGH_IMPEDANCE_ENABLE);
 		user_ctl_status = val->intval;
 		break;
-    case POWER_SUPPLY_PROP_RESUME_CHARGING:
-            bq->soc_resume_charging = val->intval;
-      break;
 	case POWER_SUPPLY_PROP_STATUS:
 	case POWER_SUPPLY_PROP_COOL_TEMP:
 	case POWER_SUPPLY_PROP_WARM_TEMP:
 	case POWER_SUPPLY_PROP_VOLTAGE_MIN:
 	case POWER_SUPPLY_PROP_SYSTEM_TEMP_LEVEL:
-         pr_info("bq24152 no need to set this prop: %d\n",psp);
-         break;
 	default:
-        rc = -EINVAL;
-        break;
+		return -EINVAL;
 	}
 	return rc;
 }
@@ -1822,7 +1554,6 @@ static int bq2415x_property_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_WARM_TEMP:
 	case POWER_SUPPLY_PROP_SYSTEM_TEMP_LEVEL:
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
-    case POWER_SUPPLY_PROP_RESUME_CHARGING:
 		return 1;
 	default:
 		break;
@@ -1837,16 +1568,10 @@ static void bq2415x_external_power_changed(struct power_supply *psy)
 								charger);
 	unsigned long flags;
 	spin_lock_irqsave(&bq->ibat_change_lock, flags);
-    if(!bq->use_only_charge)
-    {
-       if (!bq->ti_bms_psy)
-          bq->ti_bms_psy = power_supply_get_by_name("ti-bms");
-    }
-    else
-    {
-      if (!bq->qcom_bms_psy)
-        bq->qcom_bms_psy = power_supply_get_by_name("bms");
-    }
+	
+	if (!bq->ti_bms_psy)
+		bq->ti_bms_psy = power_supply_get_by_name("ti-bms");
+	
 	if (!bq->qcom_charger_psy)
 		bq->qcom_charger_psy = power_supply_get_by_name("battery");
 
@@ -1856,7 +1581,6 @@ static void bq2415x_external_power_changed(struct power_supply *psy)
 
 static char *bq2415x_supplied_to[] = {
 	"ti-bms",
-     "bms"
 };
 static int bq2415x_power_supply_init(struct bq2415x_device *bq)
 {
@@ -2384,12 +2108,6 @@ static int jeita_select_zone(jeita_entry **r_entry,int temp,jeita_spec *batt_par
 			break;
 	}
 
-#ifdef CONFIG_HUAWEI_HLTHERM_CHARGING
-	if(get_high_low_temp_flag())
-	{
-		i = NORMAL;
-	}
-#endif
 	if(i < ZONE_MAX)
 	{
 		*r_entry = entry + i;
@@ -2449,33 +2167,19 @@ static int jeita_check_status_migrate(jeita_entry **r_selected_zone, jeita_entry
 	jeita_param_init_check(batt_param);
 	jeita_find_running_zone(&running_zone,batt_param);
 	*r_running_zone = running_zone;
-    if(!g_bq->use_only_charge)
-    {
-	   if(g_battery_measure_by_bq27510_device)
-	   {
-		    union power_supply_propval val;
-		    g_battery_measure_by_bq27510_device->ti_bms_psy.get_property( \
-			    &g_battery_measure_by_bq27510_device->ti_bms_psy,POWER_SUPPLY_PROP_TEMP,&val);
-		    temp = val.intval;
-	   }
-	   else
-	   {
-		    temp = TEMP_DEFAULT;
-       }
-    }
-    else
-    {
-       if (g_bq->qcom_charger_psy)
-       {
-            union power_supply_propval val;
-            g_bq->qcom_charger_psy->get_property(g_bq->qcom_charger_psy,POWER_SUPPLY_PROP_TEMP,&val);
-            temp = val.intval;
-       }
-       else
-       {
-          temp = TEMP_DEFAULT;
-       }
-    }
+
+	if(g_battery_measure_by_bq27510_device)
+	{
+		union power_supply_propval val;
+		g_battery_measure_by_bq27510_device->ti_bms_psy.get_property( \
+			&g_battery_measure_by_bq27510_device->ti_bms_psy,POWER_SUPPLY_PROP_TEMP,&val);
+		temp = val.intval;
+	}
+	else
+	{
+		temp = TEMP_DEFAULT;
+	}
+
 	pr_debug("current temp is [%d]\n",temp);
 
 	jeita_select_zone(&selected_zone,temp,batt_param);
@@ -2527,10 +2231,6 @@ static void bq2415x_set_appropriate_jeita(struct bq2415x_device *bq)
 		pr_debug("need jeita adjust\n");
 
 		/* cold or hot, stop charging directly,ignore IUSB worker, LOW_POWER worker current setting */
-		if(NULL == selected_zone)
-		{
-		    return;
-		}
 		if(!selected_zone->i_max)
 		{
 			ret = bq2415x_exec_command(bq,BQ2415X_CHARGER_DISABLE);
@@ -2644,10 +2344,7 @@ static int bq2415x_probe(struct i2c_client *client,
 	bq->automode = 0;
 	bq->charge_done_flag = 0;
 	bq->charge_disable = false;
-    bq->soc_resume_charging = false;
 	spin_lock_init(&bq->ibat_change_lock);
-    ret = of_property_read_u32(np, "ti,use-only-charger",
-       &bq->use_only_charge);
 
 	ret = of_property_read_u32(np, "ti,current-limit",
 			&bq->init_data.current_limit);
@@ -2709,7 +2406,6 @@ static int bq2415x_probe(struct i2c_client *client,
 		dev_info(bq->dev, "automode not supported\n");
 	}
 
-    g_bq=bq;
 	INIT_DELAYED_WORK(&bq->work, bq2415x_timer_work);
 	bq2415x_set_autotimer(bq, 1);
 	INIT_WORK(&bq->iusb_work,bq2415x_iusb_work);
@@ -2788,21 +2484,6 @@ static const struct i2c_device_id bq2415x_i2c_id_table[] = {
        { "bq24158", BQ24158 },
        {},
 };
-static void bq24152_shutdown(struct i2c_client *client)
-{
-    int rc =0;
-    struct bq2415x_device *bq = i2c_get_clientdata(client);
-    if(is_usb_chg_exist())
-    {
-        rc = bq2415x_exec_command(bq, BQ2415X_CHARGER_DISABLE);
-        if(rc < 0)
-        {
-            pr_info("disable charger failed\n");
-            return;
-        }
-    }
-    return;
-}
 
 static struct of_device_id bq2419x_charger_match_table[] =
 {
@@ -2818,7 +2499,6 @@ static struct i2c_driver bq2415x_driver = {
 	.remove = bq2415x_remove,
 	.suspend = bq24152_suspend,
 	.resume = bq24152_resume,
-    .shutdown = bq24152_shutdown,
 	.id_table = bq2415x_i2c_id_table,
 };
 module_i2c_driver(bq2415x_driver);
